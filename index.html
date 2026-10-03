@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NetPulse — Real-Time Network Traffic & Geo-IP Radar</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    .dark-map { filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%); }
+    body { background-color: #090d16; color: #e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    #map { height: 420px; width: 100%; border-radius: 0.75rem; background: #090d16; }
+    .glow-line { filter: drop-shadow(0 0 6px #22d3ee); }
+    .leaflet-container { background: #090d16 !important; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col p-4 gap-4">
+
+  <!-- Demo Replay Banner -->
+  <div id="demoBanner" class="hidden bg-indigo-950/90 border border-indigo-500/60 text-indigo-200 px-4 py-2 rounded-lg text-sm flex items-center justify-between">
+    <span><strong>Viewing Recorded Telemetry Demo</strong> — Clone Repo for Live Local Capture</span>
+    <span class="text-xs uppercase tracking-wider bg-indigo-500/30 px-2 py-0.5 rounded">Replay Loop Active</span>
+  </div>
+
+  <!-- Anomaly Alert Banner -->
+  <div id="anomalyBanner" class="hidden bg-red-950/90 border border-red-500 text-red-200 px-4 py-2 rounded-lg text-sm flex items-center justify-between animate-pulse">
+    <div class="flex items-center gap-2">
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span>
+      <strong class="uppercase tracking-wider text-xs">Security / Traffic Alert:</strong>
+      <span id="anomalyText"></span>
+    </div>
+  </div>
+
+  <!-- Top Navbar -->
+  <header class="flex flex-wrap items-center justify-between bg-slate-900/90 border border-slate-800 px-5 py-3 rounded-xl">
+    <div class="flex items-center gap-3">
+      <span id="statusDot" class="w-3 h-3 rounded-full bg-emerald-400 shadow-[0_0_10px_#34d399]"></span>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight text-white">NetPulse <span class="text-cyan-400 font-normal text-sm">Geo-IP & Socket Radar</span></h1>
+        <p id="modeSubtitle" class="text-xs text-slate-400">Connecting to local telemetry agent...</p>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-6">
+      <div class="flex gap-4 text-sm">
+        <div><span class="text-slate-400">DOWN:</span> <strong id="downStat" class="text-cyan-400 font-mono">0.0 KB/s</strong></div>
+        <div><span class="text-slate-400">UP:</span> <strong id="upStat" class="text-fuchsia-400 font-mono">0.0 KB/s</strong></div>
+        <div><span class="text-slate-400">SOCKETS:</span> <strong id="connStat" class="text-emerald-400 font-mono">0</strong></div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="recordBtn" onclick="toggleRecording()" class="text-xs bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 px-3 py-1.5 rounded-lg transition">
+          ⏺ Record 60s JSON
+        </button>
+        <button id="modeToggleBtn" onclick="toggleMode()" class="text-xs bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 px-3 py-1.5 rounded-lg transition">
+          Switch to Replay Mode
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Grid: Map + Charts -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <!-- World Radar Map -->
+    <div class="lg:col-span-2 bg-slate-900/90 border border-slate-800 p-3 rounded-xl relative">
+      <div id="map"></div>
+    </div>
+
+    <!-- Protocol & Bandwidth Panel -->
+    <div class="bg-slate-900/90 border border-slate-800 p-4 rounded-xl flex flex-col justify-between gap-4">
+      <div>
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Live Throughput (KB/s)</h2>
+        <canvas id="bwChart" height="145"></canvas>
+      </div>
+      <div class="border-t border-slate-800 pt-3">
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Protocol / Port Distribution</h2>
+        <div class="h-44 flex items-center justify-center">
+          <canvas id="portChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Live Connection Feed -->
+  <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 flex-1 overflow-hidden flex flex-col">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Active Socket Telemetry Feed</h2>
+    <div class="overflow-y-auto max-h-64">
+      <table class="w-full text-left text-xs">
+        <thead class="text-slate-400 border-b border-slate-800 sticky top-0 bg-slate-900">
+          <tr>
+            <th class="py-2 px-3">Process</th>
+            <th class="py-2 px-3">Protocol / Port</th>
+            <th class="py-2 px-3">Destination IP</th>
+            <th class="py-2 px-3">Location</th>
+            <th class="py-2 px-3">ISP / Organization</th>
+            <th class="py-2 px-3">Status</th>
+          </tr>
+        </thead>
+        <tbody id="connTableBody" class="divide-y divide-slate-800/60 font-mono"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+ // --- 1. Initialize Dark-Mode Leaflet Map ---
+  const map = L.map('map', { center: [25, 0], zoom: 2, zoomControl: false, attributionControl: false });
+ 
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  className: 'dark-map'
+}).addTo(map);
+  const arcLayer = L.layerGroup().addTo(map);
+
+  // --- 2. Initialize Chart.js Graphs ---
+  const bwCtx = document.getElementById('bwChart').getContext('2d');
+  const bwChart = new Chart(bwCtx, {
+    type: 'line',
+    data: {
+      labels: Array(20).fill(''),
+      datasets: [
+        { label: 'Download KB/s', data: Array(20).fill(0), borderColor: '#22d3ee', backgroundColor: 'rgba(34,211,238,0.1)', fill: true, tension: 0.35, pointRadius: 0 },
+        { label: 'Upload KB/s', data: Array(20).fill(0), borderColor: '#e879f9', backgroundColor: 'rgba(232,121,249,0.1)', fill: true, tension: 0.35, pointRadius: 0 }
+      ]
+    },
+    options: {
+      animation: false,
+      plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        x: { display: false },
+        y: { beginAtZero: true, grid: { color: '#1e293b' }, ticks: { color: '#64748b', font: { size: 10 } } }
+      }
+    }
+  });
+
+  const portCtx = document.getElementById('portChart').getContext('2d');
+  const portChart = new Chart(portCtx, {
+    type: 'doughnut',
+    data: {
+      labels: ['HTTPS (443)', 'HTTP (80)', 'DNS (53)', 'SSH (22)', 'Other'],
+      datasets: [{ data: [1, 0, 0, 0, 0], backgroundColor: ['#22d3ee', '#38bdf8', '#a855f7', '#f43f5e', '#f59e0b'], borderWidth: 0 }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'right', labels: { color: '#94a3b8', boxWidth: 10, font: { size: 11 } } } }
+    }
+  });
+
+  // --- 3. Dashboard Render Function ---
+  function renderFrame(frame) {
+    document.getElementById('downStat').textContent = `${frame.bandwidth.download_kbs.toFixed(1)} KB/s`;
+    document.getElementById('upStat').textContent = `${frame.bandwidth.upload_kbs.toFixed(1)} KB/s`;
+    document.getElementById('connStat').textContent = frame.connections.length;
+
+    // Anomaly Banner
+    const anomalyBanner = document.getElementById('anomalyBanner');
+    if (frame.anomalies && frame.anomalies.length > 0) {
+      anomalyBanner.classList.remove('hidden');
+      document.getElementById('anomalyText').textContent = frame.anomalies[0];
+    } else {
+      anomalyBanner.classList.add('hidden');
+    }
+
+    // Update Bandwidth Chart
+    bwChart.data.datasets[0].data.push(frame.bandwidth.download_kbs);
+    bwChart.data.datasets[0].data.shift();
+    bwChart.data.datasets[1].data.push(frame.bandwidth.upload_kbs);
+    bwChart.data.datasets[1].data.shift();
+    bwChart.update();
+
+    // Update Port Breakdown Chart
+    const p = frame.ports || {};
+    portChart.data.datasets[0].data = [
+      p['HTTPS (443)'] || 0, p['HTTP (80)'] || 0, p['DNS (53)'] || 0, p['SSH (22)'] || 0, p['Other'] || 0
+    ];
+    portChart.update();
+
+    // Draw Map Arcs & Markers
+    arcLayer.clearLayers();
+    const home = [frame.home.lat, frame.home.lon];
+    L.circleMarker(home, { radius: 6, color: '#10b981', fillColor: '#10b981', fillOpacity: 0.9 })
+      .bindPopup(`<b>Home Node</b><br>${frame.home.city}`).addTo(arcLayer);
+
+    frame.connections.forEach(c => {
+      if (!c.lat && !c.lon) return;
+      const dest = [c.lat, c.lon];
+      const isAlert = ![22, 53, 80, 443, 8080].includes(c.remote_port);
+      const color = isAlert ? '#f43f5e' : '#22d3ee';
+
+      // Curved arc midpoint
+      const midLat = (home[0] + dest[0]) / 2 + 8;
+      const midLon = (home[1] + dest[1]) / 2;
+      L.polyline([home, [midLat, midLon], dest], { color, weight: 1.6, opacity: 0.65, className: 'glow-line' }).addTo(arcLayer);
+
+      L.circleMarker(dest, { radius: 4.5, color, fillColor: color, fillOpacity: 0.85 })
+        .bindPopup(`<b>${c.process}</b> → ${c.remote_ip}:${c.remote_port}<br>${c.city}, ${c.country}<br><span style="color:#94a3b8">${c.org}</span>`)
+        .addTo(arcLayer);
+    });
+
+    // Update Connection Feed Table
+    const tbody = document.getElementById('connTableBody');
+    tbody.innerHTML = frame.connections.map(c => {
+      const unusual = ![22, 53, 80, 443, 8080].includes(c.remote_port);
+      return `<tr class="hover:bg-slate-800/50 ${unusual ? 'text-red-300 bg-red-950/30' : 'text-slate-300'}">
+        <td class="py-1.5 px-3 font-semibold text-cyan-300">${c.process}</td>
+        <td class="py-1.5 px-3">${c.protocol}:${c.remote_port}</td>
+        <td class="py-1.5 px-3">${c.remote_ip}</td>
+        <td class="py-1.5 px-3">${c.city}, ${c.country}</td>
+        <td class="py-1.5 px-3 truncate max-w-xs text-slate-400">${c.org}</td>
+        <td class="py-1.5 px-3"><span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300">${c.status}</span></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // --- 4. Live WebSocket + Replay Mode Engine + 60s Snapshot Recorder ---
+  let ws = null;
+  let replayTimer = null;
+  let isReplayMode = false;
+  let isRecording = false;
+  let recordedFrames = [];
+  let replayData = [];
+  let replayIndex = 0;
+
+  // Built-in fallback telemetry so Replay Mode works out-of-the-box before recording sample_traffic.json
+  const FALLBACK_FRAMES = [
+    {
+      home: { lat: 37.7749, lon: -122.4194, city: "San Francisco", country: "United States" },
+      bandwidth: { download_kbs: 420.5, upload_kbs: 68.2 },
+      ports: { "HTTPS (443)": 14, "HTTP (80)": 1, "DNS (53)": 2, "SSH (22)": 1, "Other": 1 },
+      anomalies: ["Unusual outbound port 4444 (TCP) by python3 -> 185.199.108.153"],
+      connections: [
+        { process: "chrome", protocol: "TCP", remote_ip: "142.250.190.46", remote_port: 443, city: "Mountain View", country: "United States", lat: 37.422, lon: -122.084, org: "Google LLC", status: "ESTABLISHED" },
+        { process: "ssh", protocol: "TCP", remote_ip: "35.180.0.1", remote_port: 22, city: "Paris", country: "France", lat: 48.8566, lon: 2.3522, org: "Amazon.com, Inc. (eu-west-3)", status: "ESTABLISHED" },
+        { process: "slack", protocol: "TCP", remote_ip: "52.84.150.11", remote_port: 443, city: "Frankfurt", country: "Germany", lat: 50.1109, lon: 8.6821, org: "Amazon CloudFront", status: "ESTABLISHED" },
+        { process: "python3", protocol: "TCP", remote_ip: "185.199.108.153", remote_port: 4444, city: "Amsterdam", country: "Netherlands", lat: 52.3676, lon: 4.9041, org: "Fastly, Inc.", status: "ESTABLISHED" },
+        { process: "curl", protocol: "TCP", remote_ip: "104.16.132.229", remote_port: 443, city: "Tokyo", country: "Japan", lat: 35.6762, lon: 139.6503, org: "Cloudflare, Inc.", status: "ESTABLISHED" }
+      ]
+    }
+  ];
+
+  function startLiveMode() {
+    isReplayMode = false;
+    if (replayTimer) clearInterval(replayTimer);
+    document.getElementById('demoBanner').classList.add('hidden');
+    document.getElementById('modeToggleBtn').textContent = 'Switch to Replay Mode';
+    document.getElementById('modeSubtitle').textContent = 'Live Local Socket Stream (ws://localhost:8000/ws/traffic)';
+    document.getElementById('statusDot').className = 'w-3 h-3 rounded-full bg-emerald-400 shadow-[0_0_10px_#34d399]';
+
+    try {
+      ws = new WebSocket(`ws://${location.host || 'localhost:8000'}/ws/traffic`);
+      ws.onmessage = (event) => {
+        const frame = JSON.parse(event.data);
+        if (isRecording) {
+          recordedFrames.push(frame);
+          document.getElementById('recordBtn').textContent = `⏹ Saving (${recordedFrames.length}/60s)`;
+          if (recordedFrames.length >= 60) finishRecording();
+        }
+        renderFrame(frame);
+      };
+      ws.onerror = () => startReplayMode();
+      ws.onclose = () => { if (!isReplayMode) startReplayMode(); };
+    } catch (e) {
+      startReplayMode();
+    }
+  }
+
+  async function startReplayMode() {
+    isReplayMode = true;
+    if (ws) { ws.onclose = null; ws.close(); }
+    document.getElementById('demoBanner').classList.remove('hidden');
+    document.getElementById('modeToggleBtn').textContent = 'Switch to Live Mode';
+    document.getElementById('modeSubtitle').textContent = 'Replay Mode (sample_traffic.json)';
+    document.getElementById('statusDot').className = 'w-3 h-3 rounded-full bg-indigo-400 shadow-[0_0_10px_#818cf8]';
+
+    if (replayData.length === 0) {
+      try {
+        const res = await fetch('sample_traffic.json');
+        if (res.ok) replayData = await res.json();
+      } catch (_) {}
+      if (!replayData || replayData.length === 0) replayData = FALLBACK_FRAMES;
+    }
+
+    if (replayTimer) clearInterval(replayTimer);
+    replayTimer = setInterval(() => {
+      const base = JSON.parse(JSON.stringify(replayData[replayIndex % replayData.length]));
+      if (replayData === FALLBACK_FRAMES) {
+        base.bandwidth.download_kbs = +(250 + Math.random() * 450).toFixed(1);
+        base.bandwidth.upload_kbs = +(40 + Math.random() * 90).toFixed(1);
+      }
+      renderFrame(base);
+      replayIndex++;
+    }, 1000);
+  }
+
+  function toggleMode() {
+    if (isReplayMode) startLiveMode();
+    else startReplayMode();
+  }
+
+  function toggleRecording() {
+    if (isRecording) {
+      finishRecording();
+    } else {
+      recordedFrames = [];
+      isRecording = true;
+      document.getElementById('recordBtn').textContent = '⏹ Saving (0/60s)';
+    }
+  }
+
+  function finishRecording() {
+    isRecording = false;
+    document.getElementById('recordBtn').textContent = '⏺ Record 60s JSON';
+    if (recordedFrames.length === 0) return;
+    const blob = new Blob([JSON.stringify(recordedFrames, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'sample_traffic.json';
+    a.click();
+  }
+
+  // Start in Live Mode; automatically falls back to Replay Mode on GitHub Pages
+  startLiveMode();
+</script>
+</body>
+</html>
